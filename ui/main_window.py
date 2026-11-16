@@ -28,7 +28,7 @@ class MainWindow(QMainWindow):
         self.url_input.setPlaceholderText("Paste download URL here...")
         self.add_btn = QPushButton("Add Download")
         self.add_btn.clicked.connect(self.handle_add_url)
-        
+        self.url_input.returnPressed.connect(self.handle_add_url)
         top_layout.addWidget(self.url_input)
         top_layout.addWidget(self.add_btn)
         main_layout.addLayout(top_layout)
@@ -37,6 +37,7 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["File Name", "Size", "Progress", "Speed", "Actions"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.setColumnWidth(4, 160) # Make the Actions column wide enough for both buttons
         self.table.verticalHeader().setVisible(False) # Hide row numbers
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers) # Make table read-only
         main_layout.addWidget(self.table)
@@ -59,21 +60,28 @@ class MainWindow(QMainWindow):
             
         row = self.table.rowCount()
         self.table.insertRow(row)
-        self.table.setRowHeight(row, 40) # Make rows slightly taller for buttons
+        self.table.setRowHeight(row, 40) 
         
-        self.table.setItem(row, 0, QTableWidgetItem("Connecting..."))
+        # 1. Grab the filename immediately from the URL
+        guessed_name = url.split('/')[-1].split('?')[0]
+        if not guessed_name:
+            guessed_name = "Downloading..."
+            
+        # 2. Set the table items
+        self.table.setItem(row, 0, QTableWidgetItem(guessed_name))
         self.table.setItem(row, 1, QTableWidgetItem("--"))
         self.table.setItem(row, 2, QTableWidgetItem("0%"))
         self.table.setItem(row, 3, QTableWidgetItem("0 KB/s"))
         
-        # Add the action buttons
+        # 3. Add the action buttons
         self.table.setCellWidget(row, 4, self.create_action_buttons(row))
         
         self.url_input.clear()
         
-        # Setup tracking for speed
+        # 4. Setup tracking for speed
         self.row_data[row] = {"last_bytes": 0, "last_time": time.time()}
         
+        # 5. Start the worker thread
         worker = DownloadWorker(url)
         worker.progress_signal.connect(lambda d, t: self.update_progress(row, d, t))
         worker.finished_signal.connect(lambda fn: self.download_finished(row, fn))
