@@ -2,3 +2,25 @@
 __pycache__/
 *.pyc
 .vscode/
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Download artifacts
+*.state
+*.part
+downloaded_file
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+venv/
+__pycache__/
+*.py[cod]
+test_server_files/
+*.state
+*.dat
+.vscode/
