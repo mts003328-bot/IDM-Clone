@@ -1,152 +1,181 @@
-import os
+import time
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLineEdit, QPushButton, QProgressBar, QLabel
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
+    QHeaderView, QAbstractItemView
 )
 from PySide6.QtCore import Qt
 from core.downloader import Downloader
 from core.download_worker import DownloadWorker
-
+from ui.styles import DARK_STYLE
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Python IDM Clone")
-        self.resize(650, 250)
+        self.resize(950, 500) 
+        
+        # Track Downloader instances and Worker instances per row
+        self.downloaders = {} 
+        self.workers = {} 
+        self.row_data = {} 
+        
+        self.setStyleSheet(DARK_STYLE)
 
-        # State
-        self.downloader = None
-        self.worker = None
-
-        # UI Setup
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
-        layout.setSpacing(15)
+        main_layout = QVBoxLayout(central_widget)
 
-        # URL Row
-        url_layout = QHBoxLayout()
+        top_layout = QHBoxLayout()
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Enter download URL here (e.g., http://localhost:8765/dummy.dat)")
-        self.start_btn = QPushButton("Start Download")
-        self.start_btn.clicked.connect(self.start_download)
-        url_layout.addWidget(self.url_input)
-        url_layout.addWidget(self.start_btn)
-        layout.addLayout(url_layout)
-
-        # Status Label
-        self.status_label = QLabel("Status: Idle")
-        self.status_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        layout.addWidget(self.status_label)
-
-        # Progress Bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("%p%")
-        layout.addWidget(self.progress_bar)
-
-        # Control Buttons
-        btn_layout = QHBoxLayout()
-        self.pause_btn = QPushButton("Pause")
-        self.resume_btn = QPushButton("Resume")
-        self.cancel_btn = QPushButton("Cancel")
+        self.url_input.setPlaceholderText("Paste download URL here...")
+        self.url_input.returnPressed.connect(self.handle_add_url)
+        self.add_btn = QPushButton("Add Download")
+        self.add_btn.clicked.connect(self.handle_add_url)
         
-        self.pause_btn.clicked.connect(self.pause_download)
-        self.resume_btn.clicked.connect(self.resume_download)
-        self.cancel_btn.clicked.connect(self.cancel_download)
+        top_layout.addWidget(self.url_input)
+        top_layout.addWidget(self.add_btn)
+        main_layout.addLayout(top_layout)
 
-        btn_layout.addWidget(self.pause_btn)
-        btn_layout.addWidget(self.resume_btn)
-        btn_layout.addWidget(self.cancel_btn)
-        layout.addLayout(btn_layout)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["File Name", "Size", "Progress", "Speed", "Actions"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.setColumnWidth(4, 160) 
+        self.table.verticalHeader().setVisible(False) 
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers) 
+        main_layout.addWidget(self.table)
 
-        # Initialize button states
-        self.set_idle_buttons()
+    def format_bytes(self, size):
+        if size == 0: return "0 B"
+        power = 1024
+        n = 0
+        dict_suffix = {0: "B", 1: "KB", 2: "MB", 3: "GB", 4: "TB"}
+        while size >= power and n < 4:
+            size /= power
+            n += 1
+        return f"{size:.2f} {dict_suffix[n]}"
 
-    # --------------------------------------------------------- UI Helpers
-    def set_idle_buttons(self):
-        self.start_btn.setEnabled(True)
-        self.pause_btn.setEnabled(False)
-        self.resume_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(False)
-
-    def set_active_buttons(self):
-        self.start_btn.setEnabled(False)
-        self.pause_btn.setEnabled(True)
-        self.resume_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
-
-    def set_paused_buttons(self):
-        self.start_btn.setEnabled(False)
-        self.pause_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
-        self.resume_btn.setEnabled(True)
-
-    # --------------------------------------------------------- Actions
-    def start_download(self):
+    def handle_add_url(self):
         url = self.url_input.text().strip()
         if not url:
-            self.status_label.setText("Status: Error - Please enter a URL")
             return
+            
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setRowHeight(row, 40) 
+        
+        guessed_name = url.split('/')[-1].split('?')[0] or "Downloading..."
+            
+        self.table.setItem(row, 0, QTableWidgetItem(guessed_name))
+        self.table.setItem(row, 1, QTableWidgetItem("--"))
+        self.table.setItem(row, 2, QTableWidgetItem("0%"))
+        self.table.setItem(row, 3, QTableWidgetItem("0 KB/s"))
+        self.table.setCellWidget(row, 4, self.create_action_buttons(row))
+        
+        self.url_input.clear()
+        self.row_data[row] = {"last_bytes": 0, "last_time": time.time()}
+        
+        # --- MERGED LOGIC: Create Downloader instance first ---
+        downloader = Downloader(url)
+        self.downloaders[row] = downloader
+        
+        # Spawn the worker with the downloader instance
+        self._spawn_worker(row)
 
-        self.status_label.setText("Status: Starting...")
-        self.progress_bar.setValue(0)
-        self.set_active_buttons()
+    def _spawn_worker(self, row):
+        """Starts or resumes a download thread for a specific row."""
+        worker = DownloadWorker(self.downloaders[row])
+        worker.progress.connect(lambda d, t: self.update_progress(row, d, t))
+        worker.finished.connect(lambda status: self.on_download_finished(row, status))
+        
+        self.workers[row] = worker 
+        worker.start()
 
-        self.downloader = Downloader(url)
-        self._spawn_worker()
+    def create_action_buttons(self, row):
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(5, 5, 5, 5)
+        
+        pause_btn = QPushButton("Pause")
+        pause_btn.setObjectName("pauseBtn")
+        pause_btn.clicked.connect(lambda: self.handle_pause_resume(row))
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("cancelBtn")
+        cancel_btn.clicked.connect(lambda: self.handle_cancel(row))
+        
+        layout.addWidget(pause_btn)
+        layout.addWidget(cancel_btn)
+        layout.addStretch()
+        return widget
 
-    def pause_download(self):
-        if self.downloader:
-            self.downloader.pause()
-            self.status_label.setText("Status: Pausing...")
-
-    def resume_download(self):
-        if self.downloader:
-            self.status_label.setText("Status: Resuming...")
-            self.set_active_buttons()
-            self._spawn_worker()
-
-    def cancel_download(self):
-        if self.downloader:
-            self.downloader.cancel()
-            self.status_label.setText("Status: Cancelling...")
-
-    # --------------------------------------------------------- Worker Bridge
-    def _spawn_worker(self):
-        # Create a new worker thread. (QThread automatically bridges to the GUI thread).
-        self.worker = DownloadWorker(self.downloader)
-        self.worker.progress.connect(self.update_progress)
-        self.worker.finished.connect(self.on_download_finished)
-        self.worker.start()
-
-    # --------------------------------------------------------- Signals
-    def update_progress(self, downloaded, total):
+    def update_progress(self, row, downloaded, total):
         if total > 0:
             percent = int((downloaded / total) * 100)
-            self.progress_bar.setValue(percent)
+            self.table.setItem(row, 2, QTableWidgetItem(f"{percent}%"))
+            self.table.setItem(row, 1, QTableWidgetItem(self.format_bytes(total)))
             
-            # Format bytes to MB
-            mb_done = downloaded / (1024 * 1024)
-            mb_total = total / (1024 * 1024)
-            self.status_label.setText(f"Status: Downloading... ({mb_done:.1f} MB / {mb_total:.1f} MB)")
+            current_time = time.time()
+            time_diff = current_time - self.row_data[row]["last_time"]
+            
+            if time_diff >= 1.0: 
+                bytes_diff = downloaded - self.row_data[row]["last_bytes"]
+                speed = bytes_diff / time_diff
+                self.table.setItem(row, 3, QTableWidgetItem(f"{self.format_bytes(speed)}/s"))
+                self.row_data[row]["last_time"] = current_time
+                self.row_data[row]["last_bytes"] = downloaded
 
-    def on_download_finished(self, status):
+    def handle_pause_resume(self, row):
+        if row not in self.downloaders or row not in self.workers:
+            return
+
+        btn = self.table.cellWidget(row, 4).findChild(QPushButton, "pauseBtn")
+        
+        if btn.text() == "Pause":
+            # Tell the engine to pause
+            self.downloaders[row].pause()
+            self.table.setItem(row, 2, QTableWidgetItem("Pausing..."))
+        else:
+            # Resume: Tell the engine to resume, and spawn a new thread
+            btn.setText("Pause")
+            self.table.setItem(row, 2, QTableWidgetItem("Resuming..."))
+            self._spawn_worker(row)
+
+    def handle_cancel(self, row):
+        if row in self.downloaders:
+            self.downloaders[row].cancel()
+            self.table.setItem(row, 2, QTableWidgetItem("Cancelling..."))
+
+    def on_download_finished(self, row, status):
+        """Handles the string status returned by the friend's engine."""
+        btn = self.table.cellWidget(row, 4).findChild(QPushButton, "pauseBtn")
+        
         if status == "completed":
-            self.status_label.setText("Status: Download Complete! ✅")
-            self.progress_bar.setValue(100)
-            self.set_idle_buttons()
+            self.table.setItem(row, 0, QTableWidgetItem(self.downloaders[row].filename))
+            self.table.setItem(row, 2, QTableWidgetItem("100%"))
+            self.table.setItem(row, 3, QTableWidgetItem("Complete"))
+            self.table.removeCellWidget(row, 4)
+            self.cleanup_row(row)
             
         elif status == "paused":
-            self.status_label.setText("Status: Paused ⏸")
-            self.set_paused_buttons()
+            self.table.setItem(row, 2, QTableWidgetItem("Paused ⏸"))
+            if btn: btn.setText("Resume")
             
         elif status == "cancelled":
-            self.status_label.setText("Status: Cancelled ❌")
-            self.progress_bar.setValue(0)
-            self.set_idle_buttons()
+            self.table.setItem(row, 2, QTableWidgetItem("Cancelled ❌"))
+            self.table.removeCellWidget(row, 4)
+            self.cleanup_row(row)
             
         elif status == "failed":
-            self.status_label.setText("Status: Failed (Check connection or URL) ⚠")
-            self.set_idle_buttons()
+            self.table.setItem(row, 2, QTableWidgetItem("Failed ⚠"))
+            self.table.removeCellWidget(row, 4)
+            self.cleanup_row(row)
+
+    def cleanup_row(self, row):
+        if row in self.workers:
+            self.workers[row].wait()
+            del self.workers[row]
+        if row in self.downloaders:
+            del self.downloaders[row]
+        if row in self.row_data:
+            del self.row_data[row]
