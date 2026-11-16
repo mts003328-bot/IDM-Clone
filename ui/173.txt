@@ -1,0 +1,4 @@
+added a pause and cancel button 
+added the enter key access after typing in the url rather than hovering mouse over download button to download
+fixed the cancel btn alignment 
+changed "connecting" to the file name after pressing add download
