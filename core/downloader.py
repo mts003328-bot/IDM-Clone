@@ -1,5 +1,5 @@
 import requests
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 class Downloader:
@@ -88,7 +88,7 @@ class Downloader:
             for start, end in chunks:
                 futures.append(executor.submit(self._download_chunk, start, end, self.filename, progress_callback))
             
-            for future in concurrent.futures.as_completed(futures):
+            for future in as_completed(futures):
                 if not future.result():
                     return False
 
